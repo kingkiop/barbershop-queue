@@ -3,7 +3,7 @@ import { subscribeToQueue, addToQueue, updateQueueEntry, subscribeToChairStates,
 import { sendSms } from "./sms";
 
 // ═══════════════════════════════════════════
-// CONFIG — Edit these to match your shop
+// CONFIG
 // ═══════════════════════════════════════════
 const CHAIRS = [
   { id: 1, label: "Chair 1" },
@@ -33,17 +33,10 @@ const minsAgo = (iso) => {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   return m < 1 ? "just now" : m + "m ago";
 };
-
-const calcWait = (queue, chairId, joinedAt) =>
-  queue
-    .filter(q => q.chairId === chairId && q.status === "waiting" && new Date(q.joinedAt) < new Date(joinedAt))
-    .reduce((sum, q) => sum + q.serviceTime, 0);
+const fmtMin = (m) => m >= 60 ? (m % 60 === 0 ? Math.floor(m/60) + " hr" : Math.floor(m/60) + " hr " + (m%60) + " min") : m + " min";
 
 const calcTotalWait = (queue, chairId) =>
   queue.filter(q => q.chairId === chairId && q.status === "waiting").reduce((sum, q) => sum + q.serviceTime, 0);
-
-const getPos = (queue, chairId, joinedAt) =>
-  queue.filter(q => q.chairId === chairId && q.status === "waiting" && new Date(q.joinedAt) < new Date(joinedAt)).length + 1;
 
 // ═══════════════════════════════════════════
 // SMS TOAST
@@ -74,21 +67,23 @@ function SmsToast({ log }) {
 
 // ═══════════════════════════════════════════
 // CUSTOMER TABLET
+// Steps: chair → service → info → confirm
 // ═══════════════════════════════════════════
 function CustomerTablet({ queue, chairStates, onJoin }) {
   const [step, setStep] = useState("chair");
   const [chairId, setChairId] = useState(null);
+  const [serviceId, setServiceId] = useState(null);
+  const [serviceTime, setServiceTime] = useState(null);
+  const [serviceName, setServiceName] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [notifPref, setNotifPref] = useState("sms");
-  const [serviceTime, setServiceTime] = useState(null);
-  const [selectedService, setSelectedService] = useState(null);
   const [confirmed, setConfirmed] = useState(null);
   const resetTimer = useRef(null);
 
   const reset = () => {
-    setStep("chair"); setChairId(null); setName(""); setPhone("");
-    setNotifPref("sms"); setServiceTime(null); setSelectedService(null); setConfirmed(null);
+    setStep("chair"); setChairId(null); setServiceId(null);
+    setServiceTime(null); setServiceName(""); setName(""); setPhone("");
+    setConfirmed(null);
   };
 
   useEffect(() => {
@@ -101,15 +96,15 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
   const getWaiting = (cid) => queue.filter(q => q.chairId === cid && q.status === "waiting").length;
   const getWaitTime = (cid) => calcTotalWait(queue, cid);
 
+  // ── Step 1: Pick Chair ──
   if (step === "chair") {
     return (
       <div style={s.cPage}>
         <div style={s.cTop}>
           <div style={s.cLogoMark}>✂</div>
-          <h1 style={s.cTitle}>JOIN THE LINE</h1>
-          <p style={s.cSub}>Tap your chair to get started</p>
+          <h1 style={s.cTitle}>PICK YOUR CHAIR</h1>
         </div>
-        <div style={s.cChairList}>
+        <div style={s.cChairGrid}>
           {CHAIRS.map(c => {
             const state = chairStates[c.id] || "active";
             const closed = state === "closed";
@@ -118,17 +113,22 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
             const wt = getWaitTime(c.id);
             return (
               <button key={c.id} disabled={closed}
-                onClick={() => { setChairId(c.id); setStep("info"); }}
-                style={{ ...s.cChairBtn, ...(closed ? s.cChairClosed : {}), ...(onBreak ? s.cChairBreak : {}) }}>
-                <div style={s.cChairNum}>{c.label}</div>
+                onClick={() => { setChairId(c.id); setStep("service"); }}
+                style={{
+                  ...s.cChairBtn,
+                  ...(closed ? s.cChairClosed : {}),
+                  ...(onBreak ? s.cChairOnBreak : {}),
+                }}>
+                <div style={s.cChairNum}>{c.id}</div>
+                <div style={s.cChairLabel}>{c.label}</div>
                 {closed ? (
-                  <div style={s.cChairStatus}>Closed for today</div>
+                  <div style={s.cChairMeta}>Closed</div>
                 ) : onBreak ? (
-                  <div style={{ ...s.cChairStatus, color: "#fbbf24" }}>On break · {w} waiting</div>
+                  <div style={{ ...s.cChairMeta, color: "#facc15" }}>On break</div>
                 ) : w === 0 ? (
-                  <div style={{ ...s.cChairStatus, color: "#4ade80" }}>No wait</div>
+                  <div style={{ ...s.cChairMeta, color: "#4ade80" }}>Open</div>
                 ) : (
-                  <div style={s.cChairStatus}>{w} in line · ~{wt} min</div>
+                  <div style={s.cChairMeta}>{w} waiting · ~{wt}m</div>
                 )}
               </button>
             );
@@ -138,17 +138,48 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
     );
   }
 
-  if (step === "info") {
+  // ── Step 2: Pick Service ──
+  if (step === "service") {
     const chair = CHAIRS.find(c => c.id === chairId);
     const state = chairStates[chairId] || "active";
     const onBreak = state === "break";
-    const canJoin = name.trim() && phone.trim() && serviceTime && selectedService;
+    return (
+      <div style={s.cPage}>
+        <button style={s.cBack} onClick={() => setStep("chair")}>← Back</button>
+        <div style={s.cStepHeader}>
+          <div style={s.cStepChip}>{chair.label}</div>
+          {onBreak && <div style={s.cBreakTag}>On break — you can still join</div>}
+        </div>
+        <h2 style={s.cStepTitle}>WHAT DO YOU NEED?</h2>
+        <div style={s.cServiceList}>
+          {SERVICES.map(svc => (
+            <button key={svc.id}
+              onClick={() => {
+                setServiceId(svc.id);
+                setServiceTime(svc.minutes);
+                setServiceName(svc.name);
+                setStep("info");
+              }}
+              style={s.cServiceBtn}>
+              <div style={s.cServiceName}>{svc.name}</div>
+              <div style={s.cServiceTime}>{fmtMin(svc.minutes)}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Step 3: Name + Phone ──
+  if (step === "info") {
+    const canJoin = name.trim() && phone.trim();
     const handleJoin = () => {
       if (!canJoin) return;
-      const svc = SERVICES.find(sv => sv.id === selectedService);
       const entry = {
-        id: uid(), name: name.trim(), phone: phone.trim(), notifPref,
-        chairId, serviceTime, serviceName: svc ? svc.name : "", status: "waiting", joinedDuringBreak: onBreak,
+        id: uid(), name: name.trim(), phone: phone.trim(),
+        chairId, serviceTime, serviceName,
+        status: "waiting",
+        joinedDuringBreak: (chairStates[chairId] || "active") === "break",
         joinedAt: new Date().toISOString(),
       };
       const pos = getWaiting(chairId) + 1;
@@ -160,76 +191,48 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
 
     return (
       <div style={s.cPage}>
-        <button style={s.cBack} onClick={() => setStep("chair")}>← Back</button>
-        <div style={s.cFormHead}>
-          <div style={s.cFormChair}>{chair.label}</div>
-          {onBreak && (
-            <div style={s.cBreakNotice}>
-              ⏸ This chair is on break. You can still join — we'll text you when they're back and your wait begins.
-            </div>
-          )}
+        <button style={s.cBack} onClick={() => setStep("service")}>← Back</button>
+        <div style={s.cStepHeader}>
+          <div style={s.cStepChip}>{CHAIRS.find(c => c.id === chairId)?.label}</div>
+          <div style={s.cStepService}>{serviceName}</div>
         </div>
+        <h2 style={s.cStepTitle}>YOUR INFO</h2>
         <div style={s.cFieldGroup}>
-          <label style={s.cLabel}>WHAT DO YOU NEED?</label>
-          <div style={s.cServiceList}>
-            {SERVICES.map(svc => {
-              const sel = serviceTime === svc.minutes && selectedService === svc.id;
-              return (
-                <button key={svc.id} onClick={() => { setServiceTime(svc.minutes); setSelectedService(svc.id); }}
-                  style={{ ...s.cServiceBtn, ...(sel ? s.cServiceSel : {}) }}>
-                  <div style={s.cServiceName}>{svc.name}</div>
-                  <div style={s.cServiceTime}>{svc.minutes >= 60 ? (svc.minutes === 60 ? "1 hr" : Math.floor(svc.minutes / 60) + " hr " + (svc.minutes % 60) + " min") : svc.minutes + " min"}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div style={s.cFieldGroup}>
-          <label style={s.cLabel}>YOUR INFO</label>
           <input style={s.cInput} placeholder="Your name" value={name}
             onChange={e => setName(e.target.value)} autoComplete="off" />
-          <input style={{ ...s.cInput, marginTop: 8 }} placeholder="Phone number" value={phone}
-            onChange={e => setPhone(e.target.value)} type="tel" />
         </div>
         <div style={s.cFieldGroup}>
-          <label style={s.cLabel}>NOTIFY ME VIA</label>
-          <div style={s.cToggleRow}>
-            {["sms", "whatsapp"].map(t => (
-              <button key={t} onClick={() => setNotifPref(t)}
-                style={{ ...s.cToggle, ...(notifPref === t ? s.cToggleOn : {}) }}>
-                {t === "sms" ? "📲 SMS" : "💬 WhatsApp"}
-              </button>
-            ))}
-          </div>
+          <input style={s.cInput} placeholder="(649) 343-9586" value={phone}
+            onChange={e => setPhone(e.target.value)} type="tel" />
         </div>
         <button disabled={!canJoin} onClick={handleJoin}
           style={{ ...s.cJoinBtn, opacity: canJoin ? 1 : 0.3 }}>
-          Join the Line →
+          Join the Line
         </button>
       </div>
     );
   }
 
+  // ── Step 4: Confirmation ──
   if (step === "confirm" && confirmed) {
     const chair = CHAIRS.find(c => c.id === confirmed.chairId);
     const onBreak = chairStates[confirmed.chairId] === "break";
     const ahead = confirmed.pos - 1;
+    const isFirst = ahead === 0;
     return (
       <div style={s.cPage}>
         <div style={s.cConfirm}>
           <div style={s.cCheckCircle}>✓</div>
           <h2 style={s.cConfirmTitle}>You're in line!</h2>
           <div style={s.cConfirmCard}>
-            <div style={s.cConfirmRow}><span>Service</span><strong>{confirmed.serviceName}</strong></div>
-            <div style={s.cConfirmRow}><span>Chair</span><strong>{chair.label}</strong></div>
-            <div style={s.cConfirmRow}><span>Ahead of you</span><strong>{ahead} {ahead === 1 ? "person" : "people"}</strong></div>
-            <div style={s.cConfirmRow}><span>Est. wait</span><strong>{onBreak ? "After break" : "~" + confirmed.wait + " min"}</strong></div>
-          </div>
-          <div style={s.cConfirmMsg}>
-            {onBreak
-              ? "This chair is on break. We'll text " + confirmed.phone + " when they're back and your wait begins."
-              : "You're free to leave — we'll text " + confirmed.phone + " with updates and when you're next."
-            }
+            <div style={s.cConfirmRow}><span>{confirmed.serviceName}</span><strong>{chair.label}</strong></div>
+            <div style={s.cConfirmRow}><span>Ahead of you</span><strong>{isFirst ? "You're next" : ahead + (ahead === 1 ? " person" : " people")}</strong></div>
+            {!isFirst && !onBreak && (
+              <div style={s.cConfirmRow}><span>Est. wait</span><strong>~{confirmed.wait} min</strong></div>
+            )}
+            {onBreak && (
+              <div style={s.cConfirmRow}><span>Est. wait</span><strong>After break</strong></div>
+            )}
           </div>
           <div style={s.cAutoReset}>Screen resets in a few seconds</div>
           <button style={s.cResetBtn} onClick={reset}>Done</button>
@@ -245,8 +248,62 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
 // ═══════════════════════════════════════════
 function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay, onClearDay, smsLog }) {
   const [sel, setSel] = useState(null);
+  const [locked, setLocked] = useState(true);
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState(false);
+  const PASSCODE = "2466";
+
   const getQ = (cid) => queue.filter(q => q.chairId === cid && q.status === "waiting")
     .sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt));
+
+  // ── Passcode Screen ──
+  if (locked) {
+    const handleCode = (digit) => {
+      const next = code + digit;
+      setCodeError(false);
+      if (next.length === 4) {
+        if (next === PASSCODE) {
+          setLocked(false);
+          setCode("");
+        } else {
+          setCodeError(true);
+          setTimeout(() => { setCode(""); setCodeError(false); }, 800);
+        }
+      } else {
+        setCode(next);
+      }
+    };
+    const handleDelete = () => { setCode(code.slice(0, -1)); setCodeError(false); };
+
+    return (
+      <div style={s.bPage}>
+        <div style={s.lockWrap}>
+          <div style={s.lockIcon}>🔒</div>
+          <h2 style={s.lockTitle}>Barber Access</h2>
+          <p style={s.lockSub}>Enter code to continue</p>
+          <div style={s.lockDots}>
+            {[0,1,2,3].map(i => (
+              <div key={i} style={{
+                ...s.lockDot,
+                background: codeError ? "#dc2626" : i < code.length ? "#2d6a2d" : "#d1d9d1",
+              }} />
+            ))}
+          </div>
+          {codeError && <div style={s.lockError}>Wrong code</div>}
+          <div style={s.lockPad}>
+            {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d, i) => (
+              d === "" ? <div key={i} /> :
+              <button key={i}
+                onClick={() => d === "⌫" ? handleDelete() : handleCode(String(d))}
+                style={d === "⌫" ? s.lockKeyDel : s.lockKey}>
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!sel) {
     return (
@@ -265,7 +322,7 @@ function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay,
                 <div style={s.bChairLabel}>{c.label}</div>
                 <div style={{
                   ...s.bChairState,
-                  color: state === "active" ? "#4ade80" : state === "break" ? "#fbbf24" : "#f87171"
+                  color: state === "active" ? "#4ade80" : state === "break" ? "#facc15" : "#f87171"
                 }}>
                   {state === "active" ? "Active" : state === "break" ? "On Break" : "Closed"}
                 </div>
@@ -277,15 +334,10 @@ function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay,
             );
           })}
         </div>
-
-        {/* Clear day button */}
-        <button style={s.bClearDay} onClick={onClearDay}>
-          🗑 Clear All — New Day
-        </button>
-
+        <button style={s.bClearDay} onClick={onClearDay}>🗑 Clear All — New Day</button>
         {smsLog.length > 0 && (
           <div style={s.bSmsSection}>
-            <div style={s.bSmsTitle}>📨 Recent Messages Sent</div>
+            <div style={s.bSmsTitle}>📨 Recent Messages</div>
             {smsLog.slice(-6).reverse().map((m, i) => (
               <div key={m._key || i} style={s.bSmsRow}>
                 <span style={s.bSmsDot}>📲</span>
@@ -312,14 +364,13 @@ function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay,
           <h2 style={s.bQueueTitle}>{chair.label}</h2>
           <div style={{
             ...s.bQueueState,
-            color: state === "active" ? "#4ade80" : state === "break" ? "#fbbf24" : "#f87171"
+            color: state === "active" ? "#4ade80" : state === "break" ? "#facc15" : "#f87171"
           }}>
             {state === "active" ? "● Active" : state === "break" ? "⏸ On Break" : "■ Closed"}
           </div>
         </div>
         <div style={s.bQueueCount}>{cq.length}</div>
       </div>
-
       <div style={s.bControls}>
         {state === "active" && (
           <>
@@ -337,7 +388,6 @@ function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay,
           <div style={s.bClosedMsg}>Chair is closed for today.</div>
         )}
       </div>
-
       {cq.length === 0 ? (
         <div style={s.bEmpty}>{state === "closed" ? "Done for the day ✂️" : "No one in line"}</div>
       ) : (
@@ -356,15 +406,16 @@ function BarberTablet({ queue, chairStates, onNext, onPause, onResume, onEndDay,
                 <div style={s.bCardTop}>
                   <div>
                     <div style={s.bCardName}>{entry.name}</div>
-                    <div style={s.bCardPhone}>{entry.phone} · {entry.notifPref === "whatsapp" ? "💬" : "📲"}</div>
+                    <div style={s.bCardPhone}>{entry.phone}</div>
+                    <div style={s.bCardServiceName}>{entry.serviceName || ""}</div>
                   </div>
                   <div style={s.bCardRight}>
                     <div style={s.bCardPos}>#{idx + 1}</div>
-                    <div style={s.bCardService}>{entry.serviceName || entry.serviceTime + "m"}</div>
+                    <div style={s.bCardService}>{entry.serviceTime}m</div>
                   </div>
                 </div>
                 <div style={s.bCardMeta}>
-                  Joined {minsAgo(entry.joinedAt)} · {waitAhead > 0 ? "~" + waitAhead + "m wait" : "ready"}
+                  Joined {minsAgo(entry.joinedAt)}{waitAhead > 0 ? " · ~" + waitAhead + "m wait" : ""}
                 </div>
                 {isNxt && state !== "closed" && (
                   <button style={s.bNextBtn} onClick={() => onNext(sel)}>
@@ -390,7 +441,6 @@ export default function App() {
   const [smsLog, setSmsLog] = useState([]);
   const [, setTick] = useState(0);
 
-  // Subscribe to Firebase real-time data
   useEffect(() => {
     const unsub1 = subscribeToQueue(setQueue);
     const unsub2 = subscribeToChairStates(setChairStates);
@@ -406,10 +456,12 @@ export default function App() {
     const chair = CHAIRS.find(c => c.id === entry.chairId);
     const onBreak = chairStates[entry.chairId] === "break";
 
-    if (onBreak) {
-      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". The barber is on break — we'll text you when they're back and your wait begins.");
+    if (pos === 1 && !onBreak) {
+      sendSms(entry.phone, "Hey " + entry.name + "! You're next up for " + chair.label + ". " + entry.serviceName + ".");
+    } else if (onBreak) {
+      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". The barber is on break — we'll text you when they're back.");
     } else {
-      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". ~" + wait + " min wait. We'll text you as the line moves. You're free to leave!");
+      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". ~" + wait + " min wait.");
     }
   };
 
@@ -419,7 +471,6 @@ export default function App() {
       .sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt));
     if (!cq.length) return;
 
-    // Mark first person as served
     updateQueueEntry(cq[0]._key, { status: "served" });
 
     const remaining = cq.slice(1);
@@ -427,10 +478,10 @@ export default function App() {
 
     remaining.forEach((q, i) => {
       if (i === 0) {
-        sendSms(q.phone, "🔔 " + q.name + ", YOU'RE NEXT! Head back to the shop — " + chair.label + " is ready for you!");
+        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is ready for you!");
       } else {
         const wait = remaining.slice(0, i).reduce((sum, r) => sum + r.serviceTime, 0);
-        sendSms(q.phone, "📍 " + q.name + ", you moved up! Now #" + (i + 1) + " for " + chair.label + ". ~" + wait + " min wait.");
+        sendSms(q.phone, "📍 " + q.name + ", you moved up! #" + (i + 1) + " for " + chair.label + ". ~" + wait + " min.");
       }
     });
   };
@@ -451,7 +502,6 @@ export default function App() {
       .filter(q => q.chairId === chairId && q.status === "waiting")
       .sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt));
 
-    // Clear break flags
     waiting.forEach(q => {
       updateQueueEntry(q._key, { joinedDuringBreak: false });
     });
@@ -459,9 +509,9 @@ export default function App() {
     waiting.forEach((q, i) => {
       const wait = waiting.slice(0, i).reduce((sum, r) => sum + r.serviceTime, 0);
       if (i === 0) {
-        sendSms(q.phone, "▶ " + q.name + ", " + chair.label + " is back! YOU'RE NEXT — head to the shop!");
+        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is back and ready for you!");
       } else {
-        sendSms(q.phone, "▶ " + q.name + ", " + chair.label + " is back! You're #" + (i + 1) + " in line. ~" + wait + " min wait.");
+        sendSms(q.phone, "▶ " + q.name + ", " + chair.label + " is back! You're #" + (i + 1) + " in line. ~" + wait + " min.");
       }
     });
   };
@@ -477,7 +527,7 @@ export default function App() {
   };
 
   const handleClearDay = () => {
-    if (window.confirm("Clear everything and start a fresh day? This removes all queues and resets all chairs.")) {
+    if (window.confirm("Clear everything and start a fresh day?")) {
       clearAllData();
     }
   };
@@ -487,11 +537,11 @@ export default function App() {
       <div style={s.nav}>
         <button onClick={() => setView("customer")}
           style={{ ...s.navBtn, ...(view === "customer" ? s.navOn : {}) }}>
-          📱 Customer Tablet
+          📱 Customer
         </button>
         <button onClick={() => setView("barber")}
           style={{ ...s.navBtn, ...(view === "barber" ? s.navOn : {}) }}>
-          ✂️ Barber Tablet
+          ✂️ Barber
         </button>
       </div>
       <SmsToast log={smsLog} />
@@ -506,95 +556,158 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════════
-// STYLES
+// STYLES — Green theme, square buttons
 // ═══════════════════════════════════════════
+const G = {
+  bg: "#f5f7f5",
+  card: "#ffffff",
+  border: "#d1d9d1",
+  borderStrong: "#2d6a2d",
+  primary: "#2d6a2d",
+  primaryLight: "#e8f5e8",
+  primaryDark: "#1a4d1a",
+  text: "#1a1a1a",
+  textMid: "#555",
+  textLight: "#999",
+  accent: "#facc15",
+  danger: "#dc2626",
+  dangerLight: "#fef2f2",
+};
+
 const s = {
-  root: { fontFamily: "'Outfit', 'DM Sans', system-ui, sans-serif", background: "#0a0a0c", color: "#e2e0db", minHeight: "100vh", maxWidth: 600, margin: "0 auto", WebkitFontSmoothing: "antialiased" },
-  nav: { display: "flex", gap: 4, padding: "8px 10px", background: "#101013", borderBottom: "1px solid #222228", position: "sticky", top: 0, zIndex: 300 },
-  navBtn: { flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "transparent", color: "#5a5a65", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all .15s" },
-  navOn: { background: "linear-gradient(135deg, #e8a821, #c98b0e)", color: "#0a0a0c" },
-  toast: { position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: "#1a1a1e", border: "1px solid #333", borderRadius: 14, padding: "12px 14px", display: "flex", gap: 10, alignItems: "center", maxWidth: 360, width: "92%", boxShadow: "0 20px 60px rgba(0,0,0,.7)" },
+  root: { fontFamily: "'Outfit', 'DM Sans', system-ui, sans-serif", background: G.bg, color: G.text, minHeight: "100vh", maxWidth: 600, margin: "0 auto", WebkitFontSmoothing: "antialiased" },
+
+  // Nav
+  nav: { display: "flex", gap: 4, padding: "8px 10px", background: "#fff", borderBottom: "2px solid " + G.border, position: "sticky", top: 0, zIndex: 300 },
+  navBtn: { flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "transparent", color: G.textMid, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+  navOn: { background: G.primary, color: "#fff" },
+
+  // Toast
+  toast: { position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: "#fff", border: "2px solid " + G.primary, borderRadius: 14, padding: "12px 14px", display: "flex", gap: 10, alignItems: "center", maxWidth: 360, width: "92%", boxShadow: "0 10px 40px rgba(0,0,0,.12)" },
   toastDot: { fontSize: 22, flexShrink: 0 },
   toastContent: { flex: 1 },
-  toastHead: { fontSize: 10, fontWeight: 700, color: "#777", textTransform: "uppercase", letterSpacing: ".06em" },
-  toastBody: { fontSize: 12, color: "#ddd", marginTop: 2, lineHeight: 1.4 },
-  toastX: { color: "#555", fontSize: 14, cursor: "pointer", padding: 4 },
-  cPage: { padding: "16px 16px 40px" },
-  cTop: { textAlign: "center", padding: "24px 0 20px" },
-  cLogoMark: { fontSize: 36, width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e8a821, #c98b0e)", color: "#0a0a0c", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontWeight: 700 },
-  cTitle: { fontSize: 26, fontWeight: 900, letterSpacing: ".06em", margin: 0, color: "#e8a821" },
-  cSub: { fontSize: 13, color: "#5a5a65", marginTop: 6 },
-  cChairList: { display: "flex", flexDirection: "column", gap: 6 },
-  cChairBtn: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 16px", borderRadius: 12, border: "2px solid #1e1e24", background: "#111115", cursor: "pointer", fontFamily: "inherit", color: "#e2e0db", transition: "all .15s", textAlign: "left" },
-  cChairClosed: { opacity: 0.35, cursor: "not-allowed" },
-  cChairBreak: { borderColor: "#3d3520", background: "#16140e" },
-  cChairNum: { fontSize: 17, fontWeight: 700 },
-  cChairStatus: { fontSize: 12, color: "#5a5a65", fontWeight: 600 },
-  cBack: { background: "none", border: "none", color: "#5a5a65", fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: "8px 0 12px" },
-  cFormHead: { marginBottom: 20 },
-  cFormChair: { fontSize: 22, fontWeight: 800, color: "#e8a821" },
-  cBreakNotice: { fontSize: 12, color: "#fbbf24", background: "#1c1a11", borderRadius: 10, padding: "10px 12px", marginTop: 10, lineHeight: 1.5, border: "1px solid #332e16" },
-  cFieldGroup: { marginBottom: 18 },
-  cLabel: { display: "block", fontSize: 10, fontWeight: 800, letterSpacing: ".1em", color: "#4a4a55", marginBottom: 8 },
-  cInput: { width: "100%", padding: "14px 14px", borderRadius: 10, border: "1px solid #222228", background: "#111115", color: "#e2e0db", fontSize: 15, fontFamily: "inherit", outline: "none", boxSizing: "border-box" },
-  cToggleRow: { display: "flex", gap: 8 },
-  cToggle: { flex: 1, padding: "12px", borderRadius: 10, border: "2px solid #222228", background: "#111115", color: "#777", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
-  cToggleOn: { borderColor: "#e8a821", background: "#1c1a11", color: "#fbbf24" },
+  toastHead: { fontSize: 10, fontWeight: 700, color: G.primary, textTransform: "uppercase", letterSpacing: ".06em" },
+  toastBody: { fontSize: 12, color: G.text, marginTop: 2, lineHeight: 1.4 },
+  toastX: { color: G.textLight, fontSize: 14, cursor: "pointer", padding: 4 },
+
+  // ── Customer ──
+  cPage: { padding: "20px 16px 40px" },
+  cTop: { textAlign: "center", padding: "20px 0 24px" },
+  cLogoMark: { fontSize: 32, width: 56, height: 56, borderRadius: 12, background: G.primary, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontWeight: 700 },
+  cTitle: { fontSize: 22, fontWeight: 900, letterSpacing: ".04em", margin: 0, color: G.primary },
+
+  // Chair grid — squares
+  cChairGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+  cChairBtn: {
+    aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+    borderRadius: 12, border: "3px solid " + G.border, background: "#fff",
+    cursor: "pointer", fontFamily: "inherit", color: G.text, transition: "all .15s",
+  },
+  cChairClosed: { opacity: 0.3, cursor: "not-allowed", background: "#f0f0f0" },
+  cChairOnBreak: { borderColor: "#e5c200", background: "#fffef0" },
+  cChairNum: { fontSize: 28, fontWeight: 900, color: G.primary },
+  cChairLabel: { fontSize: 11, color: G.textMid, fontWeight: 600, marginTop: 2 },
+  cChairMeta: { fontSize: 10, color: G.textLight, fontWeight: 600, marginTop: 6 },
+
+  // Step header
+  cBack: { background: "none", border: "none", color: G.textMid, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: "4px 0 12px" },
+  cStepHeader: { display: "flex", alignItems: "center", gap: 10, marginBottom: 20 },
+  cStepChip: { background: G.primaryLight, color: G.primary, fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8 },
+  cStepService: { fontSize: 13, fontWeight: 600, color: G.textMid },
+  cBreakTag: { fontSize: 11, color: "#b59200", fontWeight: 600 },
+  cStepTitle: { fontSize: 18, fontWeight: 800, color: G.primary, marginBottom: 16 },
+
+  // Service list
   cServiceList: { display: "flex", flexDirection: "column", gap: 6 },
-  cServiceBtn: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 16px", borderRadius: 12, border: "2px solid #1e1e24", background: "#111115", cursor: "pointer", fontFamily: "inherit", color: "#e2e0db", transition: "all .15s", textAlign: "left" },
-  cServiceSel: { borderColor: "#e8a821", background: "#1c1a11", boxShadow: "0 0 20px rgba(232,168,33,.1)" },
-  cServiceName: { fontSize: 15, fontWeight: 700 },
-  cServiceTime: { fontSize: 12, color: "#4a4a55", fontWeight: 600 },
-  cJoinBtn: { width: "100%", padding: "16px", borderRadius: 12, border: "none", background: "linear-gradient(135deg, #e8a821, #c98b0e)", color: "#0a0a0c", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", marginTop: 8 },
+  cServiceBtn: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "18px 16px", borderRadius: 12, border: "3px solid " + G.border,
+    background: "#fff", cursor: "pointer", fontFamily: "inherit",
+    color: G.text, transition: "all .15s", textAlign: "left",
+  },
+  cServiceName: { fontSize: 15, fontWeight: 700, color: G.text },
+  cServiceTime: { fontSize: 13, color: G.textLight, fontWeight: 600 },
+
+  // Info
+  cFieldGroup: { marginBottom: 14 },
+  cInput: {
+    width: "100%", padding: "16px 14px", borderRadius: 12,
+    border: "3px solid " + G.border, background: "#fff",
+    color: G.text, fontSize: 16, fontFamily: "inherit",
+    outline: "none", boxSizing: "border-box",
+  },
+  cSmsNote: { fontSize: 11, color: G.textLight, textAlign: "center", marginTop: 10 },
+
+  cJoinBtn: {
+    width: "100%", padding: "18px", borderRadius: 12, border: "none",
+    background: G.primary, color: "#fff", fontSize: 16, fontWeight: 800,
+    cursor: "pointer", fontFamily: "inherit", marginTop: 8,
+  },
+
+  // Confirm
   cConfirm: { textAlign: "center", padding: "40px 0" },
-  cCheckCircle: { width: 60, height: 60, borderRadius: "50%", background: "#16a34a", color: "#fff", fontSize: 28, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" },
-  cConfirmTitle: { fontSize: 22, fontWeight: 900, margin: 0 },
-  cConfirmCard: { background: "#111115", borderRadius: 12, padding: 16, margin: "16px auto", maxWidth: 300, textAlign: "left", border: "1px solid #222228" },
-  cConfirmRow: { display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #1a1a1e", fontSize: 14, color: "#999" },
-  cConfirmMsg: { fontSize: 13, color: "#777", margin: "16px auto", maxWidth: 300, lineHeight: 1.5 },
-  cAutoReset: { fontSize: 11, color: "#3a3a44", marginTop: 12 },
-  cResetBtn: { marginTop: 12, padding: "10px 24px", borderRadius: 8, border: "1px solid #222228", background: "transparent", color: "#777", fontSize: 12, cursor: "pointer", fontFamily: "inherit" },
+  cCheckCircle: { width: 56, height: 56, borderRadius: "50%", background: G.primary, color: "#fff", fontSize: 26, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" },
+  cConfirmTitle: { fontSize: 20, fontWeight: 900, margin: 0, color: G.primary },
+  cConfirmCard: { background: "#fff", borderRadius: 12, padding: 16, margin: "16px auto", maxWidth: 300, textAlign: "left", border: "2px solid " + G.border },
+  cConfirmRow: { display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #eee", fontSize: 14, color: G.textMid },
+  cAutoReset: { fontSize: 11, color: G.textLight, marginTop: 16 },
+  cResetBtn: { marginTop: 10, padding: "10px 24px", borderRadius: 8, border: "2px solid " + G.border, background: "#fff", color: G.textMid, fontSize: 12, cursor: "pointer", fontFamily: "inherit" },
+
+  // ── Barber ──
   bPage: { padding: "16px 14px 40px" },
   bHeader: { marginBottom: 20 },
-  bTitle: { fontSize: 22, fontWeight: 900, margin: 0 },
-  bSub: { fontSize: 12, color: "#5a5a65", marginTop: 2 },
+  bTitle: { fontSize: 22, fontWeight: 900, margin: 0, color: G.primary },
+  bSub: { fontSize: 12, color: G.textMid, marginTop: 2 },
   bChairGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
-  bChairCard: { padding: "16px 12px", borderRadius: 12, border: "1px solid #1e1e24", background: "#111115", cursor: "pointer", fontFamily: "inherit", color: "#e2e0db", textAlign: "center", transition: "all .15s" },
+  bChairCard: { padding: "16px 12px", borderRadius: 12, border: "2px solid " + G.border, background: "#fff", cursor: "pointer", fontFamily: "inherit", color: G.text, textAlign: "center" },
   bChairLabel: { fontSize: 16, fontWeight: 700 },
   bChairState: { fontSize: 11, fontWeight: 700, marginTop: 4 },
-  bChairCount: { fontSize: 12, color: "#5a5a65", marginTop: 4 },
-  bBreakJoined: { fontSize: 10, color: "#fbbf24", marginTop: 4, fontWeight: 600 },
-  bClearDay: { width: "100%", padding: "12px", borderRadius: 10, border: "1px solid #2a1515", background: "transparent", color: "#f87171", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginTop: 16 },
-  bBack: { background: "none", border: "none", color: "#5a5a65", fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: "6px 0 14px" },
+  bChairCount: { fontSize: 12, color: G.textMid, marginTop: 4 },
+  bBreakJoined: { fontSize: 10, color: "#b59200", marginTop: 4, fontWeight: 600 },
+  bClearDay: { width: "100%", padding: "12px", borderRadius: 10, border: "2px solid #f5d5d5", background: "#fff", color: G.danger, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginTop: 16 },
+  bBack: { background: "none", border: "none", color: G.textMid, fontSize: 13, cursor: "pointer", fontFamily: "inherit", padding: "6px 0 14px" },
   bQueueHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-  bQueueTitle: { fontSize: 22, fontWeight: 800, margin: 0 },
+  bQueueTitle: { fontSize: 22, fontWeight: 800, margin: 0, color: G.primary },
   bQueueState: { fontSize: 12, fontWeight: 700, marginTop: 2 },
-  bQueueCount: { fontSize: 28, fontWeight: 900, color: "#e8a821", background: "#1c1a11", borderRadius: 12, padding: "8px 16px" },
+  bQueueCount: { fontSize: 28, fontWeight: 900, color: G.primary, background: G.primaryLight, borderRadius: 12, padding: "8px 16px" },
   bControls: { display: "flex", gap: 8, marginBottom: 16 },
-  bCtrlPause: { flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "#44370a", color: "#fbbf24", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
-  bCtrlEnd: { flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #3a2020", background: "transparent", color: "#f87171", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
-  bCtrlResume: { flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "#16a34a", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
-  bClosedMsg: { fontSize: 13, color: "#5a5a65", padding: "10px 0" },
-  bEmpty: { fontSize: 14, color: "#3a3a44", textAlign: "center", padding: "40px 0" },
+  bCtrlPause: { flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "#fef3c7", color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+  bCtrlEnd: { flex: 1, padding: "12px", borderRadius: 10, border: "2px solid #fecaca", background: "#fff", color: G.danger, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+  bCtrlResume: { flex: 1, padding: "12px", borderRadius: 10, border: "none", background: G.primary, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+  bClosedMsg: { fontSize: 13, color: G.textMid, padding: "10px 0" },
+  bEmpty: { fontSize: 14, color: G.textLight, textAlign: "center", padding: "40px 0" },
   bQueueList: { display: "flex", flexDirection: "column", gap: 6 },
-  bCard: { background: "#111115", borderRadius: 12, padding: 14, border: "1px solid #1e1e24" },
-  bCardNext: { borderColor: "#e8a821", background: "#14120b" },
-  bCardBreak: { borderLeft: "3px solid #fbbf24", background: "#13120d" },
-  bNextLabel: { fontSize: 9, fontWeight: 800, color: "#e8a821", letterSpacing: ".08em", marginBottom: 6 },
-  bBreakLabel: { fontSize: 9, fontWeight: 700, color: "#fbbf24", marginBottom: 6 },
+  bCard: { background: "#fff", borderRadius: 12, padding: 14, border: "2px solid " + G.border },
+  bCardNext: { borderColor: G.primary, background: G.primaryLight },
+  bCardBreak: { borderLeft: "4px solid #facc15", background: "#fffef5" },
+  bNextLabel: { fontSize: 9, fontWeight: 800, color: G.primary, letterSpacing: ".08em", marginBottom: 6 },
+  bBreakLabel: { fontSize: 9, fontWeight: 700, color: "#92400e", marginBottom: 6 },
   bCardTop: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" },
   bCardName: { fontSize: 15, fontWeight: 700 },
-  bCardPhone: { fontSize: 11, color: "#4a4a55", marginTop: 2 },
+  bCardPhone: { fontSize: 11, color: G.textLight, marginTop: 2 },
+  bCardServiceName: { fontSize: 11, color: G.primary, fontWeight: 600, marginTop: 2 },
   bCardRight: { textAlign: "right" },
-  bCardPos: { fontSize: 13, fontWeight: 700, color: "#4a4a55" },
-  bCardService: { fontSize: 11, color: "#e8a821", fontWeight: 600, marginTop: 2 },
-  bCardMeta: { fontSize: 11, color: "#3a3a44", marginTop: 6 },
-  bNextBtn: { width: "100%", padding: "12px", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginTop: 10 },
-  bSmsSection: { marginTop: 24, borderTop: "1px solid #1e1e24", paddingTop: 14 },
-  bSmsTitle: { fontSize: 11, fontWeight: 700, color: "#4a4a55", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".06em" },
-  bSmsRow: { display: "flex", alignItems: "center", gap: 6, padding: "6px 0", borderBottom: "1px solid #141418", fontSize: 11 },
+  bCardPos: { fontSize: 13, fontWeight: 700, color: G.textLight },
+  bCardService: { fontSize: 11, color: G.primary, fontWeight: 600, marginTop: 2 },
+  bCardMeta: { fontSize: 11, color: G.textLight, marginTop: 6 },
+  bNextBtn: { width: "100%", padding: "12px", borderRadius: 8, border: "none", background: G.primary, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginTop: 10 },
+  bSmsSection: { marginTop: 24, borderTop: "2px solid " + G.border, paddingTop: 14 },
+  bSmsTitle: { fontSize: 11, fontWeight: 700, color: G.textMid, marginBottom: 8, textTransform: "uppercase", letterSpacing: ".06em" },
+  bSmsRow: { display: "flex", alignItems: "center", gap: 6, padding: "6px 0", borderBottom: "1px solid #f0f0f0", fontSize: 11 },
   bSmsDot: { fontSize: 12, flexShrink: 0 },
-  bSmsTo: { color: "#777", fontWeight: 600, minWidth: 90 },
-  bSmsMsg: { flex: 1, color: "#4a4a55", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  bSmsTime: { color: "#333", fontSize: 10, flexShrink: 0 },
+  bSmsTo: { color: G.textMid, fontWeight: 600, minWidth: 90 },
+  bSmsMsg: { flex: 1, color: G.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  bSmsTime: { color: G.textLight, fontSize: 10, flexShrink: 0 },
+
+  // Lock screen
+  lockWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "70vh", padding: "20px 0" },
+  lockIcon: { fontSize: 40, marginBottom: 12 },
+  lockTitle: { fontSize: 20, fontWeight: 800, color: G.primary, margin: 0 },
+  lockSub: { fontSize: 13, color: G.textMid, marginTop: 4 },
+  lockDots: { display: "flex", gap: 14, margin: "24px 0 8px" },
+  lockDot: { width: 16, height: 16, borderRadius: "50%", transition: "background .15s" },
+  lockError: { fontSize: 12, color: "#dc2626", fontWeight: 600, marginTop: 4, height: 18 },
+  lockPad: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 20, width: 240 },
+  lockKey: { width: "100%", aspectRatio: "1.4", borderRadius: 12, border: "2px solid " + G.border, background: "#fff", fontSize: 22, fontWeight: 700, color: G.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" },
+  lockKeyDel: { width: "100%", aspectRatio: "1.4", borderRadius: 12, border: "none", background: "transparent", fontSize: 20, color: G.textMid, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" },
 };
