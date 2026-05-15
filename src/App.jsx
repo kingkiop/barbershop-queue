@@ -119,8 +119,7 @@ function CustomerTablet({ queue, chairStates, onJoin }) {
                   ...(closed ? s.cChairClosed : {}),
                   ...(onBreak ? s.cChairOnBreak : {}),
                 }}>
-                <div style={s.cChairNum}>{c.id}</div>
-                <div style={s.cChairLabel}>{c.label}</div>
+                <div style={s.cChairNum}>{c.label}</div>
                 {closed ? (
                   <div style={s.cChairMeta}>Closed</div>
                 ) : onBreak ? (
@@ -457,11 +456,11 @@ export default function App() {
     const onBreak = chairStates[entry.chairId] === "break";
 
     if (pos === 1 && !onBreak) {
-      sendSms(entry.phone, "Hey " + entry.name + "! You're next up for " + chair.label + ". " + entry.serviceName + ".");
+      sendSms(entry.phone, "Hey " + entry.name + "! You're next up for " + chair.label + ". (The Barbershop)");
     } else if (onBreak) {
-      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". The barber is on break — we'll text you when they're back.");
+      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". The barber is on break — we'll text you when they're back. (The Barbershop)");
     } else {
-      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". ~" + wait + " min wait.");
+      sendSms(entry.phone, "Hey " + entry.name + "! You're #" + pos + " in line for " + chair.label + ". ~" + wait + " min wait. (The Barbershop)");
     }
   };
 
@@ -478,10 +477,10 @@ export default function App() {
 
     remaining.forEach((q, i) => {
       if (i === 0) {
-        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is ready for you!");
+        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is ready for you! (The Barbershop)");
       } else {
         const wait = remaining.slice(0, i).reduce((sum, r) => sum + r.serviceTime, 0);
-        sendSms(q.phone, "📍 " + q.name + ", you moved up! #" + (i + 1) + " for " + chair.label + ". ~" + wait + " min.");
+        sendSms(q.phone, "📍 " + q.name + ", you moved up! #" + (i + 1) + " for " + chair.label + ". ~" + wait + " min. (The Barbershop)");
       }
     });
   };
@@ -490,7 +489,7 @@ export default function App() {
     setChairState(chairId, "break");
     const chair = CHAIRS.find(c => c.id === chairId);
     queue.filter(q => q.chairId === chairId && q.status === "waiting").forEach(q => {
-      sendSms(q.phone, "⏸ " + q.name + ", " + chair.label + " is taking a break. Your spot is saved — we'll text you when they're back.");
+      sendSms(q.phone, "⏸ " + q.name + ", " + chair.label + " is taking a break. Your spot is saved — we'll text you when they're back. (The Barbershop)");
     });
   };
 
@@ -509,9 +508,9 @@ export default function App() {
     waiting.forEach((q, i) => {
       const wait = waiting.slice(0, i).reduce((sum, r) => sum + r.serviceTime, 0);
       if (i === 0) {
-        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is back and ready for you!");
+        sendSms(q.phone, "🔔 YOU'RE NEXT — " + chair.label + " is back and ready for you! (The Barbershop)");
       } else {
-        sendSms(q.phone, "▶ " + q.name + ", " + chair.label + " is back! You're #" + (i + 1) + " in line. ~" + wait + " min.");
+        sendSms(q.phone, "▶ " + q.name + ", " + chair.label + " is back! You're #" + (i + 1) + " in line. ~" + wait + " min. (The Barbershop)");
       }
     });
   };
@@ -521,7 +520,7 @@ export default function App() {
     const chair = CHAIRS.find(c => c.id === chairId);
     const waiting = queue.filter(q => q.chairId === chairId && q.status === "waiting");
     waiting.forEach(q => {
-      sendSms(q.phone, q.name + ", " + chair.label + " is done for the day. Sorry we couldn't get to you — come back tomorrow!");
+      sendSms(q.phone, q.name + ", " + chair.label + " is done for the day. Sorry we couldn't get to you — come back tomorrow! (The Barbershop)");
       updateQueueEntry(q._key, { status: "cleared" });
     });
   };
@@ -575,7 +574,7 @@ const G = {
 };
 
 const s = {
-  root: { fontFamily: "'Outfit', 'DM Sans', system-ui, sans-serif", background: G.bg, color: G.text, minHeight: "100vh", maxWidth: 600, margin: "0 auto", WebkitFontSmoothing: "antialiased" },
+  root: { fontFamily: "'Outfit', 'DM Sans', system-ui, sans-serif", background: G.bg, color: G.text, minHeight: "100vh", maxWidth: 900, margin: "0 auto", WebkitFontSmoothing: "antialiased", padding: "0 env(safe-area-inset-right) 0 env(safe-area-inset-left)" },
 
   // Nav
   nav: { display: "flex", gap: 4, padding: "8px 10px", background: "#fff", borderBottom: "2px solid " + G.border, position: "sticky", top: 0, zIndex: 300 },
@@ -597,7 +596,7 @@ const s = {
   cTitle: { fontSize: 22, fontWeight: 900, letterSpacing: ".04em", margin: 0, color: G.primary },
 
   // Chair grid — squares
-  cChairGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+  cChairGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 },
   cChairBtn: {
     aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
     borderRadius: 12, border: "3px solid " + G.border, background: "#fff",
@@ -605,7 +604,7 @@ const s = {
   },
   cChairClosed: { opacity: 0.3, cursor: "not-allowed", background: "#f0f0f0" },
   cChairOnBreak: { borderColor: "#e5c200", background: "#fffef0" },
-  cChairNum: { fontSize: 28, fontWeight: 900, color: G.primary },
+  cChairNum: { fontSize: 18, fontWeight: 800, color: G.primary },
   cChairLabel: { fontSize: 11, color: G.textMid, fontWeight: 600, marginTop: 2 },
   cChairMeta: { fontSize: 10, color: G.textLight, fontWeight: 600, marginTop: 6 },
 
