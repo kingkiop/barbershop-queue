@@ -39,33 +39,6 @@ const calcTotalWait = (queue, chairId) =>
   queue.filter(q => q.chairId === chairId && q.status === "waiting").reduce((sum, q) => sum + q.serviceTime, 0);
 
 // ═══════════════════════════════════════════
-// SMS TOAST
-// ═══════════════════════════════════════════
-function SmsToast({ log }) {
-  const [visible, setVisible] = useState(null);
-  const prevLen = useRef(log.length);
-  useEffect(() => {
-    if (log.length > prevLen.current) {
-      setVisible(log[log.length - 1]);
-      const t = setTimeout(() => setVisible(null), 5000);
-      prevLen.current = log.length;
-      return () => clearTimeout(t);
-    }
-  }, [log.length]);
-  if (!visible) return null;
-  return (
-    <div style={s.toast} onClick={() => setVisible(null)}>
-      <div style={s.toastDot}>📲</div>
-      <div style={s.toastContent}>
-        <div style={s.toastHead}>SMS to {visible.to}</div>
-        <div style={s.toastBody}>{visible.message}</div>
-      </div>
-      <span style={s.toastX}>✕</span>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════
 // CUSTOMER TABLET
 // Steps: chair → service → info → confirm
 // ═══════════════════════════════════════════
@@ -543,7 +516,6 @@ export default function App() {
           ✂️ Barber
         </button>
       </div>
-      <SmsToast log={smsLog} />
       {view === "customer"
         ? <CustomerTablet queue={queue} chairStates={chairStates} onJoin={handleJoin} />
         : <BarberTablet queue={queue} chairStates={chairStates}
@@ -581,14 +553,6 @@ const s = {
   navBtn: { flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "transparent", color: G.textMid, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
   navOn: { background: G.primary, color: "#fff" },
 
-  // Toast
-  toast: { position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: "#fff", border: "2px solid " + G.primary, borderRadius: 14, padding: "12px 14px", display: "flex", gap: 10, alignItems: "center", maxWidth: 360, width: "92%", boxShadow: "0 10px 40px rgba(0,0,0,.12)" },
-  toastDot: { fontSize: 22, flexShrink: 0 },
-  toastContent: { flex: 1 },
-  toastHead: { fontSize: 10, fontWeight: 700, color: G.primary, textTransform: "uppercase", letterSpacing: ".06em" },
-  toastBody: { fontSize: 12, color: G.text, marginTop: 2, lineHeight: 1.4 },
-  toastX: { color: G.textLight, fontSize: 14, cursor: "pointer", padding: 4 },
-
   // ── Customer ──
   cPage: { padding: "20px 16px 40px" },
   cTop: { textAlign: "center", padding: "20px 0 24px" },
@@ -605,7 +569,6 @@ const s = {
   cChairClosed: { opacity: 0.3, cursor: "not-allowed", background: "#f0f0f0" },
   cChairOnBreak: { borderColor: "#e5c200", background: "#fffef0" },
   cChairNum: { fontSize: 18, fontWeight: 800, color: G.primary },
-  cChairLabel: { fontSize: 11, color: G.textMid, fontWeight: 600, marginTop: 2 },
   cChairMeta: { fontSize: 10, color: G.textLight, fontWeight: 600, marginTop: 6 },
 
   // Step header
@@ -635,8 +598,6 @@ const s = {
     color: G.text, fontSize: 16, fontFamily: "inherit",
     outline: "none", boxSizing: "border-box",
   },
-  cSmsNote: { fontSize: 11, color: G.textLight, textAlign: "center", marginTop: 10 },
-
   cJoinBtn: {
     width: "100%", padding: "18px", borderRadius: 12, border: "none",
     background: G.primary, color: "#fff", fontSize: 16, fontWeight: 800,
